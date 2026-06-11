@@ -40,8 +40,13 @@ class FileMeta:
     file_path: Path
     file_name: str
     model_name: str
+    equipment_no: str
+    chamber_no: str
+    batch_no: str
+    measurement_surface: str
     measure_position: str
     measure_date: pd.Timestamp
+    judgement: str
 
 
 DATE_PATTERN = re.compile(r"_(\d{8})$")
@@ -49,29 +54,69 @@ CSV_ENCODINGS = ["utf-8-sig", "cp932", "shift_jis", "utf-8"]
 
 
 def parse_file_meta(file_path: Path) -> Optional[FileMeta]:
-    stem = file_path.stem
-    m = DATE_PATTERN.search(stem)
-    if not m:
+    stem = file_path.stem.strip()
+    # 区切りがスペース/アンダースコアのどちらでも読めるようにする
+    parts = [p for p in re.split(r"[ _]+", stem) if p]
+    if not parts:
         return None
 
-    date_str = m.group(1)
-    prefix = stem[: m.start()]
+    date_idx = -1
+    for i in range(len(parts) - 1, -1, -1):
+        if re.fullmatch(r"\d{8}", parts[i]):
+            date_idx = i
+            break
 
-    if " " in prefix:
-        model_name, measure_position = prefix.rsplit(" ", 1)
-    else:
-        model_name, measure_position = prefix, "未指定"
+    if date_idx == -1:
+        return None
 
+    date_str = parts[date_idx]
     date_value = pd.to_datetime(date_str, format="%Y%m%d", errors="coerce")
     if pd.isna(date_value):
         return None
 
+    judgement = "未指定"
+    if date_idx + 1 < len(parts) and parts[date_idx + 1].upper() in {"OK", "NG"}:
+        judgement = parts[date_idx + 1].upper()
+
+    before_date = parts[:date_idx]
+
+    equipment_no = "未指定"
+    chamber_no = "未指定"
+    batch_no = "未指定"
+    measurement_surface = "未指定"
+
+    if len(before_date) >= 5:
+        model_tokens = before_date[:-4]
+        model_name = "_".join(model_tokens).strip() if model_tokens else before_date[0].strip()
+        equipment_no = before_date[-4].strip()
+        chamber_no = before_date[-3].strip()
+        batch_no = before_date[-2].strip()
+        measurement_surface = before_date[-1].strip()
+    else:
+        if len(before_date) >= 2:
+            model_name = "_".join(before_date[:-1]).strip()
+            measurement_surface = before_date[-1].strip()
+        elif len(before_date) == 1:
+            model_name = before_date[0].strip()
+        else:
+            model_name = "未指定"
+
+    if not model_name:
+        model_name = "未指定"
+
+    measure_position = f"設備{equipment_no}_槽{chamber_no}_バッチ{batch_no}_{measurement_surface}"
+
     return FileMeta(
         file_path=file_path,
         file_name=file_path.name,
-        model_name=model_name.strip(),
-        measure_position=measure_position.strip(),
+        model_name=model_name,
+        equipment_no=equipment_no,
+        chamber_no=chamber_no,
+        batch_no=batch_no,
+        measurement_surface=measurement_surface,
+        measure_position=measure_position,
         measure_date=date_value,
+        judgement=judgement,
     )
 
 
@@ -169,7 +214,12 @@ def load_folder_data(folder_path: str) -> Tuple[pd.DataFrame, Dict[str, pd.DataF
                 {
                     "ファイル名": file_key,
                     "機種名": meta.model_name,
+                    "設備No": meta.equipment_no,
+                    "チャンバーNo": meta.chamber_no,
+                    "バッチNo": meta.batch_no,
+                    "測定面": meta.measurement_surface,
                     "測定位置": meta.measure_position,
+                    "判定": meta.judgement,
                     "測定日": meta.measure_date,
                     "データ点数": len(wave_df),
                 }
@@ -180,7 +230,7 @@ def load_folder_data(folder_path: str) -> Tuple[pd.DataFrame, Dict[str, pd.DataF
     if not meta_rows:
         raise ValueError("有効なCSVを読み込めませんでした。")
 
-    meta_df = pd.DataFrame(meta_rows).sort_values(["測定日", "機種名", "測定位置"]).reset_index(drop=True)
+    meta_df = pd.DataFrame(meta_rows).sort_values(["測定日", "機種名", "設備No", "チャンバーNo", "バッチNo"]).reset_index(drop=True)
     return meta_df, waves_by_file, warnings
 
 
@@ -223,7 +273,12 @@ def load_uploaded_files(uploaded_files: List) -> Tuple[pd.DataFrame, Dict[str, p
                 {
                     "ファイル名": file_key,
                     "機種名": meta.model_name,
+                    "設備No": meta.equipment_no,
+                    "チャンバーNo": meta.chamber_no,
+                    "バッチNo": meta.batch_no,
+                    "測定面": meta.measurement_surface,
                     "測定位置": meta.measure_position,
+                    "判定": meta.judgement,
                     "測定日": meta.measure_date,
                     "データ点数": len(wave_df),
                 }
@@ -234,7 +289,7 @@ def load_uploaded_files(uploaded_files: List) -> Tuple[pd.DataFrame, Dict[str, p
     if not meta_rows:
         raise ValueError("有効なCSVを読み込めませんでした。")
 
-    meta_df = pd.DataFrame(meta_rows).sort_values(["測定日", "機種名", "測定位置"]).reset_index(drop=True)
+    meta_df = pd.DataFrame(meta_rows).sort_values(["測定日", "機種名", "設備No", "チャンバーNo", "バッチNo"]).reset_index(drop=True)
     return meta_df, waves_by_file, warnings
 
 
@@ -586,12 +641,15 @@ def main() -> None:
         y_input_min = y_col1.number_input("Y最小（測定値）", value=y_min_default, format="%.6f")
         y_input_max = y_col2.number_input("Y最大（測定値）", value=y_max_default, format="%.6f")
 
-    if x_input_min < x_input_max:
+    x_range_valid = x_input_min < x_input_max
+    y_range_valid = y_input_min < y_input_max
+
+    if x_range_valid:
         fig.update_xaxes(range=[x_input_min, x_input_max])
     else:
         st.warning("X軸の範囲が不正です。X最小はX最大より小さくしてください。")
 
-    if y_input_min < y_input_max:
+    if y_range_valid:
         fig.update_yaxes(range=[y_input_min, y_input_max])
     else:
         st.warning("Y軸の範囲が不正です。Y最小はY最大より小さくしてください。")
@@ -605,6 +663,126 @@ def main() -> None:
         template="plotly_white",
     )
     st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("系列別コーティング日トレンド（同一機種）")
+    trend_model_list = sorted(filtered_meta["機種名"].dropna().unique().tolist())
+    trend_model = st.selectbox("トレンド対象機種", options=trend_model_list, index=0, key="trend_model")
+    model_meta = filtered_meta[filtered_meta["機種名"] == trend_model].copy()
+
+    equipment_list = sorted(model_meta["設備No"].dropna().astype(str).unique().tolist())
+    chamber_list = sorted(model_meta["チャンバーNo"].dropna().astype(str).unique().tolist())
+
+    trend_col1, trend_col2 = st.columns(2)
+    selected_equipment = trend_col1.multiselect(
+        "設備号機",
+        options=equipment_list,
+        default=equipment_list,
+        key="trend_equipment_filter",
+    )
+    selected_chamber = trend_col2.multiselect(
+        "チャンバー",
+        options=chamber_list,
+        default=chamber_list,
+        key="trend_chamber_filter",
+    )
+
+    model_meta = model_meta[
+        model_meta["設備No"].astype(str).isin(selected_equipment)
+        & model_meta["チャンバーNo"].astype(str).isin(selected_chamber)
+    ].sort_values("測定日")
+
+    if model_meta.empty:
+        st.warning("選択した設備号機・チャンバーに一致するデータがありません。")
+        st.stop()
+
+    series_master: set = set()
+    for file_name in model_meta["ファイル名"]:
+        cols = [c for c in waves_by_file[file_name].columns if c.startswith("測定値")]
+        series_master.update(cols)
+
+    trend_series_all = sorted(series_master, key=lambda s: int(s.replace("測定値", "")))
+    default_trend_series = trend_series_all[: min(3, len(trend_series_all))]
+    trend_series_selected = st.multiselect(
+        "系列を選択（例: 測定値1=B列, 測定値2=C列, 測定値3=D列）",
+        trend_series_all,
+        default=default_trend_series,
+        key="trend_series_selected",
+    )
+
+    if trend_series_selected:
+        series_tabs = st.tabs(trend_series_selected)
+        for tab, series_name in zip(series_tabs, trend_series_selected):
+            with tab:
+                series_fig = go.Figure()
+                for _, meta_row in model_meta.iterrows():
+                    file_name = meta_row["ファイル名"]
+                    wave = waves_by_file[file_name]
+                    if series_name not in wave.columns:
+                        continue
+
+                    date_text = meta_row["測定日"].strftime("%Y-%m-%d")
+                    judgement_text = str(meta_row.get("判定", "未指定"))
+                    eq_text = str(meta_row.get("設備No", "-"))
+                    ch_text = str(meta_row.get("チャンバーNo", "-"))
+                    label = f"{date_text} / 設備{eq_text} / 槽{ch_text} / {judgement_text} / {file_name}"
+
+                    series_fig.add_trace(
+                        go.Scatter(
+                            x=wave["測定点"],
+                            y=wave[series_name],
+                            mode="lines",
+                            name=label,
+                            line={"width": 1.4},
+                        )
+                    )
+
+                # メイン波形で設定した規格値（上限/下限）を系列別トレンドにも反映
+                if standard_ok and upper is not None and lower is not None and x_spec_range:
+                    x_min_spec, x_max_spec = x_spec_range
+                    x_mask_spec = (x >= x_min_spec) & (x <= x_max_spec)
+                    x_spec = x[x_mask_spec]
+                    upper_spec = upper[x_mask_spec]
+                    lower_spec = lower[x_mask_spec]
+
+                    series_fig.add_trace(
+                        go.Scatter(
+                            x=x_spec,
+                            y=upper_spec,
+                            mode="lines",
+                            name="上限",
+                            line={"width": 2, "dash": "dash", "color": "red"},
+                        )
+                    )
+                    series_fig.add_trace(
+                        go.Scatter(
+                            x=x_spec,
+                            y=lower_spec,
+                            mode="lines",
+                            name="下限",
+                            line={"width": 2, "dash": "dash", "color": "red"},
+                            fill="tonexty",
+                            fillcolor="rgba(255, 0, 0, 0.1)",
+                        )
+                    )
+
+                series_fig.update_layout(
+                    title=f"{trend_model} - {series_name}（コーティング日別2D波形）",
+                    xaxis_title="測定点",
+                    yaxis_title=series_name,
+                    height=500,
+                    legend_title="コーティング日 / 判定 / ファイル",
+                    template="plotly_white",
+                )
+
+                # 「グラフ表示範囲設定」の入力値を系列別トレンド波形にも一括適用
+                if x_range_valid:
+                    series_fig.update_xaxes(range=[x_input_min, x_input_max])
+                if y_range_valid:
+                    series_fig.update_yaxes(range=[y_input_min, y_input_max])
+
+                st.plotly_chart(series_fig, use_container_width=True)
+    else:
+        st.info("系列を1つ以上選択してください。")
 
     st.subheader("規格逸脱アラート")
     if not standard_ok:
