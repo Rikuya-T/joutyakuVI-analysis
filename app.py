@@ -671,8 +671,9 @@ def main() -> None:
 
     equipment_list = sorted(model_meta["設備No"].dropna().astype(str).unique().tolist())
     chamber_list = sorted(model_meta["チャンバーNo"].dropna().astype(str).unique().tolist())
+    surface_list = sorted(model_meta["測定面"].dropna().astype(str).unique().tolist())
 
-    trend_col1, trend_col2 = st.columns(2)
+    trend_col1, trend_col2, trend_col3 = st.columns(3)
     selected_equipment = trend_col1.multiselect(
         "設備号機",
         options=equipment_list,
@@ -685,14 +686,21 @@ def main() -> None:
         default=chamber_list,
         key="trend_chamber_filter",
     )
+    selected_surface = trend_col3.multiselect(
+        "測定面",
+        options=surface_list,
+        default=surface_list,
+        key="trend_surface_filter",
+    )
 
     model_meta = model_meta[
         model_meta["設備No"].astype(str).isin(selected_equipment)
         & model_meta["チャンバーNo"].astype(str).isin(selected_chamber)
+        & model_meta["測定面"].astype(str).isin(selected_surface)
     ].sort_values("測定日")
 
     if model_meta.empty:
-        st.warning("選択した設備号機・チャンバーに一致するデータがありません。")
+        st.warning("選択した設備号機・チャンバー・測定面に一致するデータがありません。")
         st.stop()
 
     series_master: set = set()
