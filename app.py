@@ -792,6 +792,85 @@ def main() -> None:
     else:
         st.info("系列を1つ以上選択してください。")
 
+    st.subheader("測定点のプロットグラフ")
+    candidate_points = np.sort(wave_df["測定点"].dropna().unique())
+    if candidate_points.size == 0:
+        st.info("測定点データがないため、プロットグラフを表示できません。")
+    else:
+        point_surface_list = sorted(model_meta["測定面"].dropna().astype(str).unique().tolist())
+        selected_point_surface = st.multiselect(
+            "測定面",
+            options=point_surface_list,
+            default=point_surface_list,
+            key="point_plot_surface_filter",
+        )
+        point_plot_meta = model_meta[model_meta["測定面"].astype(str).isin(selected_point_surface)].sort_values("測定日")
+
+        if point_plot_meta.empty:
+            st.warning("選択した測定面に一致するデータがありません。")
+            st.stop()
+
+        point_options = [float(v) for v in candidate_points.tolist()]
+        default_point_idx = len(point_options) // 2
+        selected_point = st.selectbox(
+            "測定点を選択",
+            options=point_options,
+            index=default_point_idx,
+            format_func=lambda v: f"{v:.4f}",
+            key="point_plot_selected_x",
+        )
+
+        if trend_series_selected:
+            point_plot_fig = go.Figure()
+            for series_name in trend_series_selected:
+                rows = []
+                for _, meta_row in point_plot_meta.iterrows():
+                    file_name = meta_row["ファイル名"]
+                    wave = waves_by_file[file_name]
+                    if series_name not in wave.columns:
+                        continue
+
+                    x_wave = wave["測定点"].to_numpy(dtype=float)
+                    y_wave = wave[series_name].to_numpy(dtype=float)
+                    valid = ~np.isnan(x_wave) & ~np.isnan(y_wave)
+                    if valid.sum() == 0:
+                        continue
+
+                    x_valid = x_wave[valid]
+                    y_valid = y_wave[valid]
+                    point_value = float(np.interp(float(selected_point), x_valid, y_valid))
+                    rows.append(
+                        {
+                            "測定日": meta_row["測定日"],
+                            "値": point_value,
+                        }
+                    )
+
+                if not rows:
+                    continue
+
+                series_df = pd.DataFrame(rows).sort_values("測定日")
+                point_plot_fig.add_trace(
+                    go.Scatter(
+                        x=series_df["測定日"],
+                        y=series_df["値"],
+                        mode="lines+markers",
+                        name=series_name,
+                    )
+                )
+
+            point_plot_fig.update_layout(
+                title=f"測定点 {float(selected_point):.4f} の日付推移",
+                xaxis_title="測定日",
+                yaxis_title="測定値",
+                height=420,
+                legend_title="系列",
+                template="plotly_white",
+            )
+            st.plotly_chart(point_plot_fig, use_container_width=True)
+        else:
+            st.info("測定点のプロットグラフは、上で系列を選択すると表示されます。")
+
     st.subheader("規格逸脱アラート")
     if not standard_ok:
         st.warning("規格値が未設定のためアラート判定を実行できません。")
