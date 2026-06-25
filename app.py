@@ -531,7 +531,15 @@ def main() -> None:
         )
 
         if uploaded_files:
-            st.sidebar.markdown("#### 保存オプション")
+            current_signature = tuple(sorted(Path(str(u.name)).name for u in uploaded_files))
+            confirmed_signature = st.session_state.get("persist_confirmed_signature", tuple())
+            if current_signature != confirmed_signature:
+                st.session_state["persist_hide_confirm_ui"] = False
+
+            hide_confirm_ui = st.session_state.get("persist_hide_confirm_ui", False)
+
+            if not hide_confirm_ui:
+                st.sidebar.markdown("#### 保存オプション")
             duplicate_names: List[str] = []
             for uploaded in uploaded_files:
                 safe_name = Path(str(uploaded.name)).name
@@ -539,7 +547,7 @@ def main() -> None:
                     duplicate_names.append(safe_name)
 
             overwrite_policies: Dict[str, str] = {}
-            if duplicate_names:
+            if duplicate_names and not hide_confirm_ui:
                 st.sidebar.caption("同名ファイルが既に保存されています。上書き可否を選択してください。")
                 for name in sorted(set(duplicate_names)):
                     overwrite_policies[name] = st.sidebar.selectbox(
@@ -549,7 +557,7 @@ def main() -> None:
                         key=f"overwrite_policy_{name}",
                     )
 
-            if st.sidebar.button("アップロード内容を保存して反映", type="primary"):
+            if (not hide_confirm_ui) and st.sidebar.button("アップロード内容を保存して反映", type="primary"):
                 saved_new, overwritten, skipped, persist_warnings = persist_uploaded_files(
                     uploaded_files,
                     persist_dir,
@@ -559,6 +567,12 @@ def main() -> None:
                 st.session_state["persist_overwritten"] = overwritten
                 st.session_state["persist_skipped"] = skipped
                 st.session_state["persist_warnings"] = persist_warnings
+                st.session_state["persist_confirmed_signature"] = current_signature
+                st.session_state["persist_hide_confirm_ui"] = True
+                st.rerun()
+
+            if hide_confirm_ui:
+                st.sidebar.caption("保存内容を反映済みです。別ファイルを選択すると確認画面が再表示されます。")
 
         saved_new = st.session_state.get("persist_saved_new", [])
         overwritten = st.session_state.get("persist_overwritten", [])
