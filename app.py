@@ -51,6 +51,51 @@ class FileMeta:
 
 DATE_PATTERN = re.compile(r"_(\d{8})$")
 CSV_ENCODINGS = ["utf-8-sig", "cp932", "shift_jis", "utf-8"]
+PERSIST_UPLOAD_DIR = Path(__file__).resolve().parent / "persisted_uploads"
+
+
+def ensure_persist_upload_dir() -> Path:
+    PERSIST_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    return PERSIST_UPLOAD_DIR
+
+
+def persist_uploaded_files(
+    uploaded_files: List,
+    persist_dir: Path,
+    overwrite_policies: Dict[str, str],
+) -> Tuple[List[str], List[str], List[str], List[str]]:
+    """アップロードファイルを永続保存する。
+    戻り値: (新規保存, 上書き保存, スキップ, 警告)
+    """
+    saved_new: List[str] = []
+    overwritten: List[str] = []
+    skipped: List[str] = []
+    warnings: List[str] = []
+
+    for uploaded_file in uploaded_files:
+        raw_name = str(uploaded_file.name)
+        file_name = Path(raw_name).name
+        if not file_name.lower().endswith(".csv"):
+            warnings.append(f"CSV以外のため保存対象外: {file_name}")
+            continue
+
+        target_path = persist_dir / file_name
+        exists = target_path.exists()
+        selected_policy = overwrite_policies.get(file_name, "上書きしない")
+        overwrite = selected_policy == "上書きする"
+
+        if exists and not overwrite:
+            skipped.append(file_name)
+            continue
+
+        file_bytes = uploaded_file.getvalue()
+        target_path.write_bytes(file_bytes)
+        if exists:
+            overwritten.append(file_name)
+        else:
+            saved_new.append(file_name)
+
+    return saved_new, overwritten, skipped, warnings
 
 
 def parse_file_meta(file_path: Path) -> Optional[FileMeta]:
@@ -475,19 +520,64 @@ def main() -> None:
     warn_list = []
 
     if input_mode == "ファイルアップロード":
+        persist_dir = ensure_persist_upload_dir()
+        persisted_files = sorted(persist_dir.glob("*.csv"))
+        st.sidebar.caption(f"保存済みCSV: {len(persisted_files):,} 件")
+
         uploaded_files = st.sidebar.file_uploader(
             "CSVファイルを選択（複数選択可能）",
             type="csv",
             accept_multiple_files=True,
         )
+
         if uploaded_files:
-            try:
-                meta_df, waves_by_file, warn_list = load_uploaded_files(uploaded_files)
-            except Exception as ex:
-                st.error(f"データ読込エラー: {ex}")
-                st.stop()
-        else:
-            st.info("左サイドバーでCSVファイルを選択してください。")
+            st.sidebar.markdown("#### 保存オプション")
+            duplicate_names: List[str] = []
+            for uploaded in uploaded_files:
+                safe_name = Path(str(uploaded.name)).name
+                if (persist_dir / safe_name).exists():
+                    duplicate_names.append(safe_name)
+
+            overwrite_policies: Dict[str, str] = {}
+            if duplicate_names:
+                st.sidebar.caption("同名ファイルが既に保存されています。上書き可否を選択してください。")
+                for name in sorted(set(duplicate_names)):
+                    overwrite_policies[name] = st.sidebar.selectbox(
+                        f"{name}",
+                        options=["上書きしない", "上書きする"],
+                        index=0,
+                        key=f"overwrite_policy_{name}",
+                    )
+
+            if st.sidebar.button("アップロード内容を保存して反映", type="primary"):
+                saved_new, overwritten, skipped, persist_warnings = persist_uploaded_files(
+                    uploaded_files,
+                    persist_dir,
+                    overwrite_policies,
+                )
+                st.session_state["persist_saved_new"] = saved_new
+                st.session_state["persist_overwritten"] = overwritten
+                st.session_state["persist_skipped"] = skipped
+                st.session_state["persist_warnings"] = persist_warnings
+
+        saved_new = st.session_state.get("persist_saved_new", [])
+        overwritten = st.session_state.get("persist_overwritten", [])
+        skipped = st.session_state.get("persist_skipped", [])
+        persist_warnings = st.session_state.get("persist_warnings", [])
+
+        if saved_new:
+            st.sidebar.success(f"新規保存: {len(saved_new)} 件")
+        if overwritten:
+            st.sidebar.success(f"上書き保存: {len(overwritten)} 件")
+        if skipped:
+            st.sidebar.info(f"上書きせず保持: {len(skipped)} 件")
+        for w in persist_warnings:
+            st.sidebar.warning(w)
+
+        try:
+            meta_df, waves_by_file, warn_list = load_folder_data(str(persist_dir))
+        except Exception:
+            st.info("左サイドバーでCSVファイルを選択し、『アップロード内容を保存して反映』を押してください。")
             st.stop()
     else:
         folder_path = folder_picker()
