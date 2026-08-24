@@ -441,21 +441,18 @@ def calc_file_violation_rate(
 
 
 def render_highlightable_trend_chart(
-        fig: go.Figure,
-        legend_items: List[Dict[str, str]],
-        chart_key: str,
-        background_color: str,
-        text_color: str,
-        border_color: str,
-        height: int = 500,
+    fig: go.Figure,
+    legend_items: List[Dict[str, str]],
+    chart_key: str,
+    height: int = 500,
 ) -> None:
-        """線のダブルクリックで右側のコーティング情報を強調表示する。"""
-        fig.update_layout(showlegend=False, margin={"l": 60, "r": 20, "t": 60, "b": 50})
+    """線のダブルクリックで右側のコーティング情報を強調表示する。"""
+    fig.update_layout(showlegend=False, margin={"l": 60, "r": 20, "t": 60, "b": 50})
 
-        safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", chart_key)
-        figure_json = fig.to_json()
-        legend_json = json.dumps(legend_items, ensure_ascii=False)
-        html = f"""
+    safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", chart_key)
+    figure_json = fig.to_json()
+    legend_json = json.dumps(legend_items, ensure_ascii=False)
+    html = f"""
 <div id="wrap-{safe_key}" class="trend-wrap">
     <div id="chart-{safe_key}" class="trend-chart"></div>
     <div class="trend-side">
@@ -467,11 +464,15 @@ def render_highlightable_trend_chart(
 <style>
     #wrap-{safe_key} {{ display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; width: 100%; font-family: sans-serif; }}
     #chart-{safe_key} {{ width: 100%; height: {height}px; }}
-    #wrap-{safe_key} .trend-side {{ height: {height}px; overflow-y: auto; border: 1px solid {border_color}; border-radius: 8px; background: {background_color}; color: {text_color}; padding: 10px; box-sizing: border-box; }}
-    #wrap-{safe_key} .trend-side-title {{ font-weight: 700; color: {text_color}; margin-bottom: 8px; font-size: 13px; }}
-    #wrap-{safe_key} .trend-item {{ border-left: 4px solid transparent; border-radius: 6px; padding: 7px 8px; margin-bottom: 6px; color: {text_color}; font-size: 12px; line-height: 1.35; word-break: break-all; background: {background_color}; }}
+    #wrap-{safe_key} .trend-side {{ height: {height}px; overflow-y: auto; border: 1px solid #d9dee7; border-radius: 8px; background: transparent; color: #111111; padding: 10px; box-sizing: border-box; }}
+    #wrap-{safe_key} .trend-side-title {{ font-weight: 700; color: inherit; margin-bottom: 8px; font-size: 13px; }}
+    #wrap-{safe_key} .trend-item {{ border-left: 4px solid transparent; border-radius: 6px; padding: 7px 8px; margin-bottom: 6px; color: inherit; font-size: 12px; line-height: 1.35; word-break: break-all; background: transparent; }}
     #wrap-{safe_key} .trend-item.active {{ border-left-color: #d62728; background: #fff1f1; color: #b00020; font-weight: 700; }}
-    #wrap-{safe_key} .trend-hint {{ color: {text_color}; opacity: 0.75; font-size: 11px; margin-top: 10px; }}
+    #wrap-{safe_key} .trend-hint {{ color: inherit; opacity: 0.75; font-size: 11px; margin-top: 10px; }}
+    @media (prefers-color-scheme: dark) {{
+        #wrap-{safe_key} .trend-side {{ border-color: #667085; color: #ffffff; }}
+        #wrap-{safe_key} .trend-item.active {{ background: #5a1717; color: #ffffff; }}
+    }}
 </style>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <script>
@@ -482,6 +483,14 @@ def render_highlightable_trend_chart(
     const legend = document.getElementById("legend-{safe_key}");
     const selectable = new Set(legendItems.map(item => item.trace_index));
     const originalWidths = fig.data.map(trace => trace.line && trace.line.width ? trace.line.width : 2);
+    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const textColor = isDark ? "#ffffff" : "#111111";
+    const gridColor = isDark ? "#667085" : "#d9dee7";
+    fig.layout.paper_bgcolor = "rgba(0,0,0,0)";
+    fig.layout.plot_bgcolor = "rgba(0,0,0,0)";
+    fig.layout.font = {{...(fig.layout.font || {{}}), color: textColor}};
+    fig.layout.xaxis = {{...(fig.layout.xaxis || {{}}), gridcolor: gridColor, zerolinecolor: gridColor}};
+    fig.layout.yaxis = {{...(fig.layout.yaxis || {{}}), gridcolor: gridColor, zerolinecolor: gridColor}};
 
     legendItems.forEach(item => {{
         const div = document.createElement("div");
@@ -515,7 +524,7 @@ def render_highlightable_trend_chart(
 }})();
 </script>
 """
-        components.html(html, height=height + 30, scrolling=False)
+    components.html(html, height=height + 30, scrolling=False)
 
 
 def find_csv_folders(base_dirs: List[Path], max_depth: int = 3, max_results: int = 30) -> List[str]:
@@ -889,18 +898,12 @@ def main() -> None:
 
     trend_date_min = model_meta["測定日"].min().date()
     trend_date_max = model_meta["測定日"].max().date()
-    trend_filter_col1, trend_filter_col2 = st.columns([2, 1])
-    selected_trend_dates = trend_filter_col1.date_input(
+    selected_trend_dates = st.date_input(
         "表示対象期間",
         value=(trend_date_min, trend_date_max),
         min_value=trend_date_min,
         max_value=trend_date_max,
         key="series_trend_date_filter",
-    )
-    trend_color_mode = trend_filter_col2.selectbox(
-        "グラフ表示配色",
-        options=["白背景・黒表示", "黒背景・白表示"],
-        key="series_trend_color_mode",
     )
 
     if isinstance(selected_trend_dates, tuple) and len(selected_trend_dates) == 2:
@@ -916,17 +919,6 @@ def main() -> None:
     if model_meta.empty:
         st.warning("選択した表示対象期間に一致するデータがありません。")
         st.stop()
-
-    if trend_color_mode == "黒背景・白表示":
-        trend_background_color = "#111111"
-        trend_grid_color = "#5a5a5a"
-        trend_text_color = "#ffffff"
-        trend_line_color = "#ffffff"
-    else:
-        trend_background_color = "#ffffff"
-        trend_grid_color = "#d9d9d9"
-        trend_text_color = "#000000"
-        trend_line_color = "#000000"
 
     series_master: set = set()
     for file_name in model_meta["ファイル名"]:
@@ -968,7 +960,7 @@ def main() -> None:
                             y=wave[series_name],
                             mode="lines",
                             name=label,
-                            line={"width": 1.4, "color": trend_line_color},
+                            line={"width": 1.4},
                         )
                     )
 
@@ -1007,13 +999,7 @@ def main() -> None:
                     yaxis_title=series_name,
                     height=500,
                     legend_title="コーティング日 / 判定 / ファイル",
-                    paper_bgcolor=trend_background_color,
-                    plot_bgcolor=trend_background_color,
-                    font={"color": trend_text_color},
-                    legend={"font": {"color": trend_text_color}},
                 )
-                series_fig.update_xaxes(gridcolor=trend_grid_color, zerolinecolor=trend_grid_color)
-                series_fig.update_yaxes(gridcolor=trend_grid_color, zerolinecolor=trend_grid_color)
 
                 # 「グラフ表示範囲設定」の入力値を系列別トレンド波形にも一括適用
                 if x_range_valid:
@@ -1025,9 +1011,6 @@ def main() -> None:
                     series_fig,
                     legend_items,
                     chart_key=f"series_trend_{trend_model}_{series_name}",
-                    background_color=trend_background_color,
-                    text_color=trend_text_color,
-                    border_color=trend_grid_color,
                     height=500,
                 )
     else:
