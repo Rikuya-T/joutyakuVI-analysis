@@ -2,6 +2,7 @@
 import os
 import sys
 import io
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -10,6 +11,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 def ensure_streamlit_context() -> None:
@@ -436,6 +438,84 @@ def calc_file_violation_rate(
     if total_count == 0:
         return 0.0
     return ng_count / total_count * 100.0
+
+
+def render_highlightable_trend_chart(
+        fig: go.Figure,
+        legend_items: List[Dict[str, str]],
+        chart_key: str,
+        background_color: str,
+        text_color: str,
+        border_color: str,
+        height: int = 500,
+) -> None:
+        """線のダブルクリックで右側のコーティング情報を強調表示する。"""
+        fig.update_layout(showlegend=False, margin={"l": 60, "r": 20, "t": 60, "b": 50})
+
+        safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", chart_key)
+        figure_json = fig.to_json()
+        legend_json = json.dumps(legend_items, ensure_ascii=False)
+        html = f"""
+<div id="wrap-{safe_key}" class="trend-wrap">
+    <div id="chart-{safe_key}" class="trend-chart"></div>
+    <div class="trend-side">
+        <div class="trend-side-title">コーティング日 / 判定 / ファイル</div>
+        <div id="legend-{safe_key}" class="trend-list"></div>
+        <div class="trend-hint">グラフ上の線をダブルクリックすると該当データを強調表示します。</div>
+    </div>
+</div>
+<style>
+    #wrap-{safe_key} {{ display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; width: 100%; font-family: sans-serif; }}
+    #chart-{safe_key} {{ width: 100%; height: {height}px; }}
+    #wrap-{safe_key} .trend-side {{ height: {height}px; overflow-y: auto; border: 1px solid {border_color}; border-radius: 8px; background: {background_color}; color: {text_color}; padding: 10px; box-sizing: border-box; }}
+    #wrap-{safe_key} .trend-side-title {{ font-weight: 700; color: {text_color}; margin-bottom: 8px; font-size: 13px; }}
+    #wrap-{safe_key} .trend-item {{ border-left: 4px solid transparent; border-radius: 6px; padding: 7px 8px; margin-bottom: 6px; color: {text_color}; font-size: 12px; line-height: 1.35; word-break: break-all; background: {background_color}; }}
+    #wrap-{safe_key} .trend-item.active {{ border-left-color: #d62728; background: #fff1f1; color: #b00020; font-weight: 700; }}
+    #wrap-{safe_key} .trend-hint {{ color: {text_color}; opacity: 0.75; font-size: 11px; margin-top: 10px; }}
+</style>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+(function() {{
+    const fig = JSON.parse({json.dumps(figure_json)});
+    const legendItems = {legend_json};
+    const chart = document.getElementById("chart-{safe_key}");
+    const legend = document.getElementById("legend-{safe_key}");
+    const selectable = new Set(legendItems.map(item => item.trace_index));
+    const originalWidths = fig.data.map(trace => trace.line && trace.line.width ? trace.line.width : 2);
+
+    legendItems.forEach(item => {{
+        const div = document.createElement("div");
+        div.className = "trend-item";
+        div.dataset.traceIndex = item.trace_index;
+        div.textContent = item.label;
+        legend.appendChild(div);
+    }});
+
+    function activateTrace(traceIndex) {{
+        const widths = fig.data.map((trace, index) => index === traceIndex ? 4 : originalWidths[index]);
+        const opacities = fig.data.map((trace, index) => selectable.has(index) && index !== traceIndex ? 0.18 : 1);
+        Plotly.restyle(chart, {{"line.width": widths, "opacity": opacities}});
+        legend.querySelectorAll(".trend-item").forEach(item => {{
+            item.classList.toggle("active", Number(item.dataset.traceIndex) === traceIndex);
+        }});
+    }}
+
+    Plotly.newPlot(chart, fig.data, fig.layout, {{responsive: true, displayModeBar: true}});
+    let lastCurve = null;
+    let lastTime = 0;
+    chart.on("plotly_click", function(eventData) {{
+        if (!eventData.points || eventData.points.length === 0) return;
+        const curveNumber = eventData.points[0].curveNumber;
+        if (!selectable.has(curveNumber)) return;
+        const now = Date.now();
+        if (lastCurve === curveNumber && now - lastTime <= 500) activateTrace(curveNumber);
+        lastCurve = curveNumber;
+        lastTime = now;
+    }});
+}})();
+</script>
+"""
+        components.html(html, height=height + 30, scrolling=False)
 
 
 def find_csv_folders(base_dirs: List[Path], max_depth: int = 3, max_results: int = 30) -> List[str]:
@@ -867,6 +947,7 @@ def main() -> None:
         for tab, series_name in zip(series_tabs, trend_series_selected):
             with tab:
                 series_fig = go.Figure()
+                legend_items: List[Dict[str, str]] = []
                 for _, meta_row in model_meta.iterrows():
                     file_name = meta_row["ファイル名"]
                     wave = waves_by_file[file_name]
@@ -878,6 +959,8 @@ def main() -> None:
                     eq_text = str(meta_row.get("設備No", "-"))
                     ch_text = str(meta_row.get("チャンバーNo", "-"))
                     label = f"{date_text} / 設備{eq_text} / 槽{ch_text} / {judgement_text} / {file_name}"
+                    trace_index = len(series_fig.data)
+                    legend_items.append({"trace_index": trace_index, "label": label})
 
                     series_fig.add_trace(
                         go.Scatter(
@@ -938,7 +1021,15 @@ def main() -> None:
                 if y_range_valid:
                     series_fig.update_yaxes(range=[y_input_min, y_input_max])
 
-                st.plotly_chart(series_fig, use_container_width=True)
+                render_highlightable_trend_chart(
+                    series_fig,
+                    legend_items,
+                    chart_key=f"series_trend_{trend_model}_{series_name}",
+                    background_color=trend_background_color,
+                    text_color=trend_text_color,
+                    border_color=trend_grid_color,
+                    height=500,
+                )
     else:
         st.info("系列を1つ以上選択してください。")
 
