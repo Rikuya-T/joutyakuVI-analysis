@@ -2,7 +2,6 @@
 import os
 import sys
 import io
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -11,7 +10,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 def ensure_streamlit_context() -> None:
@@ -440,129 +438,6 @@ def calc_file_violation_rate(
     return ng_count / total_count * 100.0
 
 
-def render_highlightable_trend_chart(
-        fig: go.Figure,
-        legend_items: List[Dict[str, str]],
-        chart_key: str,
-        height: int = 500,
-) -> None:
-        """グラフ線のダブルクリックで右側リストを強調表示する。"""
-        fig.update_layout(showlegend=False, margin={"l": 60, "r": 20, "t": 60, "b": 50})
-
-        safe_key = re.sub(r"[^a-zA-Z0-9_-]", "_", chart_key)
-        figure_json = fig.to_json()
-        legend_json = json.dumps(legend_items, ensure_ascii=False)
-        html = f"""
-<div id="wrap-{safe_key}" class="trend-wrap">
-    <div id="chart-{safe_key}" class="trend-chart"></div>
-    <div class="trend-side">
-        <div class="trend-side-title">コーティング日 / 判定 / ファイル</div>
-        <div id="legend-{safe_key}" class="trend-list"></div>
-        <div class="trend-hint">グラフ上の線をダブルクリックすると該当データを強調表示します。</div>
-    </div>
-</div>
-<style>
-    #wrap-{safe_key} {{
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 330px;
-        gap: 14px;
-        width: 100%;
-        font-family: sans-serif;
-    }}
-    #chart-{safe_key} {{
-        width: 100%;
-        height: {height}px;
-    }}
-    #wrap-{safe_key} .trend-side {{
-        height: {height}px;
-        overflow-y: auto;
-        border: 1px solid #d9dee7;
-        border-radius: 8px;
-        background: #ffffff;
-        padding: 10px;
-        box-sizing: border-box;
-    }}
-    #wrap-{safe_key} .trend-side-title {{
-        font-weight: 700;
-        color: #223047;
-        margin-bottom: 8px;
-        font-size: 13px;
-    }}
-    #wrap-{safe_key} .trend-item {{
-        border-left: 4px solid transparent;
-        border-radius: 6px;
-        padding: 7px 8px;
-        margin-bottom: 6px;
-        color: #3b4658;
-        font-size: 12px;
-        line-height: 1.35;
-        word-break: break-all;
-        background: #f7f9fc;
-    }}
-    #wrap-{safe_key} .trend-item.active {{
-        border-left-color: #d62728;
-        background: #fff1f1;
-        color: #b00020;
-        font-weight: 700;
-    }}
-    #wrap-{safe_key} .trend-hint {{
-        color: #64748b;
-        font-size: 11px;
-        margin-top: 10px;
-    }}
-</style>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<script>
-(function() {{
-    const fig = JSON.parse({json.dumps(figure_json)});
-    const legendItems = {legend_json};
-    const chart = document.getElementById("chart-{safe_key}");
-    const legend = document.getElementById("legend-{safe_key}");
-    const selectable = new Set(legendItems.map(item => item.trace_index));
-    const originalWidths = fig.data.map(trace => trace.line && trace.line.width ? trace.line.width : 2);
-
-    legendItems.forEach(item => {{
-        const div = document.createElement("div");
-        div.className = "trend-item";
-        div.dataset.traceIndex = item.trace_index;
-        div.textContent = item.label;
-        legend.appendChild(div);
-    }});
-
-    function activateTrace(traceIndex) {{
-        const widths = fig.data.map((trace, index) => index === traceIndex ? 4 : originalWidths[index]);
-        const opacities = fig.data.map((trace, index) => selectable.has(index) && index !== traceIndex ? 0.18 : 1);
-        Plotly.restyle(chart, {{"line.width": widths, "opacity": opacities}});
-        legend.querySelectorAll(".trend-item").forEach(item => {{
-            item.classList.toggle("active", Number(item.dataset.traceIndex) === traceIndex);
-        }});
-    }}
-
-    Plotly.newPlot(chart, fig.data, fig.layout, {{responsive: true, displayModeBar: true}});
-
-    let lastCurve = null;
-    let lastTime = 0;
-    chart.on("plotly_click", function(eventData) {{
-        if (!eventData.points || eventData.points.length === 0) {{
-            return;
-        }}
-        const curveNumber = eventData.points[0].curveNumber;
-        if (!selectable.has(curveNumber)) {{
-            return;
-        }}
-        const now = Date.now();
-        if (lastCurve === curveNumber && now - lastTime <= 500) {{
-            activateTrace(curveNumber);
-        }}
-        lastCurve = curveNumber;
-        lastTime = now;
-    }});
-}})();
-</script>
-"""
-        components.html(html, height=height + 30, scrolling=False)
-
-
 def find_csv_folders(base_dirs: List[Path], max_depth: int = 3, max_results: int = 30) -> List[str]:
     found: List[str] = []
 
@@ -932,6 +807,47 @@ def main() -> None:
         st.warning("選択した設備号機・チャンバー・測定面に一致するデータがありません。")
         st.stop()
 
+    trend_date_min = model_meta["測定日"].min().date()
+    trend_date_max = model_meta["測定日"].max().date()
+    trend_filter_col1, trend_filter_col2 = st.columns([2, 1])
+    selected_trend_dates = trend_filter_col1.date_input(
+        "表示対象期間",
+        value=(trend_date_min, trend_date_max),
+        min_value=trend_date_min,
+        max_value=trend_date_max,
+        key="series_trend_date_filter",
+    )
+    trend_color_mode = trend_filter_col2.selectbox(
+        "グラフ表示配色",
+        options=["白背景・黒表示", "黒背景・白表示"],
+        key="series_trend_color_mode",
+    )
+
+    if isinstance(selected_trend_dates, tuple) and len(selected_trend_dates) == 2:
+        trend_start_date, trend_end_date = selected_trend_dates
+    else:
+        trend_start_date, trend_end_date = trend_date_min, trend_date_max
+
+    model_meta = model_meta[
+        (model_meta["測定日"].dt.date >= trend_start_date)
+        & (model_meta["測定日"].dt.date <= trend_end_date)
+    ].sort_values("測定日")
+
+    if model_meta.empty:
+        st.warning("選択した表示対象期間に一致するデータがありません。")
+        st.stop()
+
+    if trend_color_mode == "黒背景・白表示":
+        trend_background_color = "#111111"
+        trend_grid_color = "#5a5a5a"
+        trend_text_color = "#ffffff"
+        trend_line_color = "#ffffff"
+    else:
+        trend_background_color = "#ffffff"
+        trend_grid_color = "#d9d9d9"
+        trend_text_color = "#000000"
+        trend_line_color = "#000000"
+
     series_master: set = set()
     for file_name in model_meta["ファイル名"]:
         cols = [c for c in waves_by_file[file_name].columns if c.startswith("測定値")]
@@ -951,7 +867,6 @@ def main() -> None:
         for tab, series_name in zip(series_tabs, trend_series_selected):
             with tab:
                 series_fig = go.Figure()
-                legend_items: List[Dict[str, str]] = []
                 for _, meta_row in model_meta.iterrows():
                     file_name = meta_row["ファイル名"]
                     wave = waves_by_file[file_name]
@@ -963,8 +878,6 @@ def main() -> None:
                     eq_text = str(meta_row.get("設備No", "-"))
                     ch_text = str(meta_row.get("チャンバーNo", "-"))
                     label = f"{date_text} / 設備{eq_text} / 槽{ch_text} / {judgement_text} / {file_name}"
-                    trace_index = len(series_fig.data)
-                    legend_items.append({"trace_index": trace_index, "label": label})
 
                     series_fig.add_trace(
                         go.Scatter(
@@ -972,7 +885,7 @@ def main() -> None:
                             y=wave[series_name],
                             mode="lines",
                             name=label,
-                            line={"width": 1.4},
+                            line={"width": 1.4, "color": trend_line_color},
                         )
                     )
 
@@ -1011,8 +924,13 @@ def main() -> None:
                     yaxis_title=series_name,
                     height=500,
                     legend_title="コーティング日 / 判定 / ファイル",
-                    template="plotly_white",
+                    paper_bgcolor=trend_background_color,
+                    plot_bgcolor=trend_background_color,
+                    font={"color": trend_text_color},
+                    legend={"font": {"color": trend_text_color}},
                 )
+                series_fig.update_xaxes(gridcolor=trend_grid_color, zerolinecolor=trend_grid_color)
+                series_fig.update_yaxes(gridcolor=trend_grid_color, zerolinecolor=trend_grid_color)
 
                 # 「グラフ表示範囲設定」の入力値を系列別トレンド波形にも一括適用
                 if x_range_valid:
@@ -1020,12 +938,7 @@ def main() -> None:
                 if y_range_valid:
                     series_fig.update_yaxes(range=[y_input_min, y_input_max])
 
-                render_highlightable_trend_chart(
-                    series_fig,
-                    legend_items,
-                    chart_key=f"series_trend_{trend_model}_{series_name}",
-                    height=500,
-                )
+                st.plotly_chart(series_fig, use_container_width=True)
     else:
         st.info("系列を1つ以上選択してください。")
 
