@@ -914,6 +914,30 @@ def main() -> None:
             st.warning("選択した測定面に一致するデータがありません。")
             st.stop()
 
+        point_plot_date_min = point_plot_meta["測定日"].min().date()
+        point_plot_date_max = point_plot_meta["測定日"].max().date()
+        selected_point_plot_dates = st.date_input(
+            "表示対象期間",
+            value=(point_plot_date_min, point_plot_date_max),
+            min_value=point_plot_date_min,
+            max_value=point_plot_date_max,
+            key="point_plot_date_filter",
+        )
+
+        if isinstance(selected_point_plot_dates, tuple) and len(selected_point_plot_dates) == 2:
+            point_plot_start_date, point_plot_end_date = selected_point_plot_dates
+        else:
+            point_plot_start_date, point_plot_end_date = point_plot_date_min, point_plot_date_max
+
+        point_plot_meta = point_plot_meta[
+            (point_plot_meta["測定日"].dt.date >= point_plot_start_date)
+            & (point_plot_meta["測定日"].dt.date <= point_plot_end_date)
+        ].sort_values("測定日")
+
+        if point_plot_meta.empty:
+            st.warning("選択した表示対象期間に一致するデータがありません。")
+            st.stop()
+
         point_options = [float(v) for v in candidate_points.tolist()]
         default_point_idx = len(point_options) // 2
         selected_point = st.selectbox(
