@@ -54,6 +54,18 @@ class FileMeta:
 DATE_PATTERN = re.compile(r"_(\d{8})$")
 CSV_ENCODINGS = ["utf-8-sig", "cp932", "shift_jis", "utf-8"]
 PERSIST_UPLOAD_DIR = Path(__file__).resolve().parent / "persisted_uploads"
+TREND_LINE_COLORS = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+]
 
 
 def ensure_persist_upload_dir() -> Path:
@@ -940,7 +952,7 @@ def main() -> None:
             with tab:
                 series_fig = go.Figure()
                 legend_items: List[Dict[str, str]] = []
-                for _, meta_row in model_meta.iterrows():
+                for data_index, (_, meta_row) in enumerate(model_meta.iterrows()):
                     file_name = meta_row["ファイル名"]
                     wave = waves_by_file[file_name]
                     if series_name not in wave.columns:
@@ -960,7 +972,10 @@ def main() -> None:
                             y=wave[series_name],
                             mode="lines",
                             name=label,
-                            line={"width": 1.4},
+                            line={
+                                "width": 1.4,
+                                "color": TREND_LINE_COLORS[data_index % len(TREND_LINE_COLORS)],
+                            },
                         )
                     )
 
